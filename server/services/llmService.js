@@ -108,9 +108,16 @@ ${html.substring(0, 15000)}`;
   }
 
   async callOllama(prompt) {
-    const response = await axios.post(`${this.ollamaUrl}/api/generate`, {
+    // Using /api/chat for better conversation handling
+    const response = await axios.post(`${this.ollamaUrl}/api/chat`, {
       model: 'deepseek-r1:1.5b',
-      prompt,
+      messages: [
+        { 
+          role: 'system', 
+          content: 'You are an experienced job hunter and career advisor. Ask clarifying questions when needed, think step-by-step, and provide practical advice from a job seeker\'s perspective. Be conversational and empathetic.' 
+        },
+        { role: 'user', content: prompt }
+      ],
       stream: false,
       options: {
         temperature: 0.7,
@@ -118,7 +125,7 @@ ${html.substring(0, 15000)}`;
       }
     }, { timeout: 60000 });
 
-    return response.data.response;
+    return response.data.message.content;
   }
 
   async callGroq(prompt) {

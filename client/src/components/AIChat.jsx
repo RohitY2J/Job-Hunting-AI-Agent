@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User } from 'lucide-react';
 import axios from 'axios';
+import LLMSwitch from './LLMSwitch';
 
 const AIChat = ({ user }) => {
   const [messages, setMessages] = useState([
@@ -128,6 +129,8 @@ const AIChat = ({ user }) => {
         <h2>AI Career Assistant</h2>
         <p>Get personalized advice for your job search journey.</p>
       </div>
+
+      <LLMSwitch />
 
       <div className="card">
         <div className="chat-container">

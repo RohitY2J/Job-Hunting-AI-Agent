@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 350px;
+      padding: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    h2 {
+      margin: 0 0 15px 0;
+      font-size: 18px;
+      color: #0a66c2;
+    }
+    .status {
+      padding: 10px;
+      border-radius: 5px;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
+    .info { background: #d1ecf1; color: #0c5460; }
+    button {
+      width: 100%;
+      padding: 10px;
+      margin: 5px 0;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .primary {
+      background: #0a66c2;
+      color: white;
+    }
+    .primary:hover {
+      background: #004182;
+    }
+    .secondary {
+      background: #f3f2ef;
+      color: #333;
+    }
+    .secondary:hover {
+      background: #e8e6e1;
+    }
+    .settings {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #ddd;
+    }
+    input {
+      width: 100%;
+      padding: 8px;
+      margin: 5px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    label {
+      font-size: 12px;
+      color: #666;
+    }
+    .job-count {
+      font-weight: bold;
+      color: #0a66c2;
+    }
+  </style>
+</head>
+<body>
+  <h2>🤖 AI Job Agent</h2>
+  
+  <div id="status" class="status info">
+    Ready to extract jobs from this page
+  </div>
+
+  <button id="extractBtn" class="primary">Extract Jobs from Page</button>
+  <button id="downloadBtn" class="secondary" style="display:none;">Download as JSON</button>
+  <button id="sendBtn" class="primary" style="display:none;">Send to Database</button>
+
+  <div class="settings">
+    <label>API Endpoint:</label>
+    <input type="text" id="apiUrl" value="http://localhost:3001" placeholder="http://localhost:3001">
+    <button id="saveSettings" class="secondary">Save Settings</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

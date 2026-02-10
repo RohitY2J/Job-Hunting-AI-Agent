@@ -7,6 +7,7 @@ const pdfParse = require('pdf-parse');
 const connectDB = require('./config/database');
 const Job = require('./models/Job');
 const Company = require('./models/Company');
+const ChatHistory = require('./models/ChatHistory');
 const htmlParserService = require('./services/htmlParserService');
 const llmService = require('./services/llmService');
 
@@ -201,10 +202,10 @@ app.post('/api/jobs/save-extracted', async (req, res) => {
   }
 });
 
-// AI chat endpoint
+// AI chat endpoint with history
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, context } = req.body;
+    const { message, context, sessionId } = req.body;
     
     // Check if message contains HTML
     if (message.includes('<') && message.includes('>')) {
@@ -216,7 +217,25 @@ app.post('/api/chat', async (req, res) => {
       });
     }
     
-    // Use LLM for intelligent responses
+    // Get or create chat history
+    let chatHistory = await ChatHistory.findOne({ sessionId });
+    if (!chatHistory) {
+      chatHistory = new ChatHistory({
+        sessionId,
+        messages: [{
+          role: 'system',
+          content: 'You are an experienced job hunter and career advisor. Ask clarifying questions when needed, think step-by-step, and provide practical advice from a job seeker\'s perspective. Be conversational and empathetic.'
+        }]
+      });
+    }
+    
+    // Add user message to history
+    chatHistory.messages.push({
+      role: 'user',
+      content: message
+    });
+    
+    // Build prompt with context
     const prompt = `You are an experienced job hunter and career advisor AI assistant.
 
 IMPORTANT INSTRUCTIONS:
@@ -229,6 +248,9 @@ User Context:
 - Skills: ${context.skills?.join(', ') || 'Not provided'}
 - Experience: ${context.experience || 'Not provided'}
 - Resume Analyzed: ${context.resumeAnalyzed ? 'Yes' : 'No'}
+
+Conversation History:
+${chatHistory.messages.slice(-5).map(m => `${m.role}: ${m.content}`).join('\n')}
 
 User Message: ${message}
 
@@ -249,15 +271,77 @@ Provide a helpful, concise response.`;
         aiResponse = ollamaResult.jobs ? generateAIResponse(message, context) : ollamaResult;
       }
       
-      res.json({ type: 'text', response: typeof aiResponse === 'string' ? aiResponse : generateAIResponse(message, context) });
+      // Add assistant response to history
+      chatHistory.messages.push({
+        role: 'assistant',
+        content: typeof aiResponse === 'string' ? aiResponse : generateAIResponse(message, context)
+      });
+      
+      // Save history
+      await chatHistory.save();
+      
+      res.json({ 
+        type: 'text', 
+        response: typeof aiResponse === 'string' ? aiResponse : generateAIResponse(message, context),
+        sessionId: chatHistory.sessionId
+      });
     } catch (llmError) {
       console.log('LLM failed, using fallback response:', llmError.message);
       const response = generateAIResponse(message, context);
-      res.json({ type: 'text', response });
+      
+      chatHistory.messages.push({
+        role: 'assistant',
+        content: response
+      });
+      await chatHistory.save();
+      
+      res.json({ type: 'text', response, sessionId: chatHistory.sessionId });
     }
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({ error: 'Failed to process chat' });
+  }
+});
+
+// Get chat history
+app.get('/api/chat/history/:sessionId', async (req, res) => {
+  try {
+    const chatHistory = await ChatHistory.findOne({ sessionId: req.params.sessionId });
+    res.json(chatHistory || { messages: [] });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch chat history' });
+  }
+});
+
+// Get all chat sessions
+app.get('/api/chat/sessions', async (req, res) => {
+  try {
+    const sessions = await ChatHistory.find({ isActive: true })
+      .select('sessionId title createdAt messages')
+      .sort({ updatedAt: -1 })
+      .limit(20);
+    
+    const formatted = sessions.map(s => ({
+      sessionId: s.sessionId,
+      title: s.title,
+      lastMessage: s.messages[s.messages.length - 1]?.content.substring(0, 50) + '...',
+      createdAt: s.createdAt,
+      messageCount: s.messages.length
+    }));
+    
+    res.json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// Create new chat session
+app.post('/api/chat/new', async (req, res) => {
+  try {
+    const sessionId = `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    res.json({ sessionId });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create session' });
   }
 });
 

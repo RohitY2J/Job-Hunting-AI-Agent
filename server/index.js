@@ -216,12 +216,77 @@ app.post('/api/chat', async (req, res) => {
       });
     }
     
-    const response = generateAIResponse(message, context);
-    res.json({ type: 'text', response });
+    // Use LLM for intelligent responses
+    const prompt = `You are an experienced job hunter and career advisor AI assistant.
+
+IMPORTANT INSTRUCTIONS:
+1. First, ask any clarifying questions you need to provide the best advice
+2. Think step-by-step before responding
+3. Draw from your experience as a job seeker to give practical, actionable advice
+4. Be conversational and empathetic
+
+User Context:
+- Skills: ${context.skills?.join(', ') || 'Not provided'}
+- Experience: ${context.experience || 'Not provided'}
+- Resume Analyzed: ${context.resumeAnalyzed ? 'Yes' : 'No'}
+
+User Message: ${message}
+
+Think through this step-by-step:
+1. What information do I need to clarify?
+2. What's the core problem or question?
+3. What practical advice can I give based on my job hunting experience?
+
+Provide a helpful, concise response.`;
+    
+    try {
+      let aiResponse;
+      if (llmService.provider === 'groq') {
+        const groqResult = await llmService.callGroq(prompt);
+        aiResponse = groqResult.jobs ? generateAIResponse(message, context) : groqResult;
+      } else {
+        const ollamaResult = await llmService.callOllama(prompt);
+        aiResponse = ollamaResult.jobs ? generateAIResponse(message, context) : ollamaResult;
+      }
+      
+      res.json({ type: 'text', response: typeof aiResponse === 'string' ? aiResponse : generateAIResponse(message, context) });
+    } catch (llmError) {
+      console.log('LLM failed, using fallback response:', llmError.message);
+      const response = generateAIResponse(message, context);
+      res.json({ type: 'text', response });
+    }
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({ error: 'Failed to process chat' });
   }
+});
+
+// Get current LLM provider
+app.get('/api/llm/provider', (req, res) => {
+  res.json({ 
+    provider: llmService.provider,
+    available: {
+      ollama: !!process.env.OLLAMA_URL,
+      groq: !!process.env.GROQ_API_KEY
+    }
+  });
+});
+
+// Switch LLM provider
+app.post('/api/llm/provider', (req, res) => {
+  const { provider } = req.body;
+  
+  if (!['ollama', 'groq'].includes(provider)) {
+    return res.status(400).json({ error: 'Invalid provider. Use "ollama" or "groq"' });
+  }
+  
+  llmService.provider = provider;
+  
+  res.json({ 
+    success: true, 
+    provider: llmService.provider,
+    message: `Switched to ${provider}`
+  });
 });
 
 // Helper functions
@@ -280,24 +345,23 @@ function generateAIResponse(message, context) {
   const lowerMessage = message.toLowerCase();
   
   if (lowerMessage.includes('resume') || lowerMessage.includes('cv')) {
-    return "I can help you analyze and improve your resume. Upload your resume file and I'll provide detailed feedback on skills, experience, and suggestions for improvement.";
+    return "Before I help with your resume, let me ask: What type of role are you targeting? What's your experience level? This will help me give you specific advice tailored to your situation.";
   }
   
   if (lowerMessage.includes('job') || lowerMessage.includes('position')) {
-    return "I can help you find relevant IT job opportunities based on your skills and preferences. What type of role are you looking for?";
+    return "To help you find the right opportunities, I need to know: What's your target role? What location are you considering? Are you open to remote work? Let me think through the best approach for your job search.";
   }
   
   if (lowerMessage.includes('interview')) {
-    return "I can help you prepare for interviews with common questions, tips, and practice scenarios. What type of interview are you preparing for?";
+    return "Let me help you prepare effectively. First, what type of interview is it (technical, behavioral, or both)? What role and company? I'll think through a step-by-step preparation plan based on my experience.";
   }
   
   if (lowerMessage.includes('cover letter')) {
-    return "I can help you create a compelling cover letter tailored to specific job applications. Do you have a particular job posting in mind?";
+    return "I can help craft a compelling cover letter. To do this well, I need: What's the job title and company? What are your key qualifications? Let me think about how to best position you for this role.";
   }
   
-  return "I'm your AI job hunting assistant. I can help with resume analysis, job matching, interview preparation, and cover letter writing. What would you like to work on?";
+  return "I'm here to help with your job search! As someone who understands the job hunting process, I can assist with resumes, interviews, applications, and career advice. What specific challenge are you facing? The more details you share, the better I can help.";
 }
-
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

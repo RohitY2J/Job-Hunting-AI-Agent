@@ -5,6 +5,7 @@ class LLMService {
     this.ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
     this.groqApiKey = process.env.GROQ_API_KEY;
     this.groqUrl = 'https://api.groq.com/openai/v1/chat/completions';
+    this.provider = process.env.LLM_PROVIDER || 'ollama'; // 'ollama' or 'groq'
   }
 
   async extractJobsFromHTML(html) {
@@ -37,10 +38,72 @@ HTML:
 ${html.substring(0, 15000)}`;
 
     try {
-      return await this.callOllama(prompt);
+      let result;
+      if (this.provider === 'groq') {
+        console.log('Using Groq API for extraction');
+        const response = await axios.post(this.groqUrl, {
+          model: 'deepseek-r1-distill-llama-70b',
+          messages: [
+            { role: 'system', content: 'You are a job data extraction assistant. Return only valid JSON.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1,
+          max_tokens: 4000
+        }, {
+          headers: {
+            'Authorization': `Bearer ${this.groqApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        });
+        result = this.parseResponse(response.data.choices[0].message.content);
+      } else {
+        console.log('Using Ollama for extraction');
+        const response = await axios.post(`${this.ollamaUrl}/api/generate`, {
+          model: 'deepseek-r1:1.5b',
+          prompt,
+          stream: false,
+          options: {
+            temperature: 0.1,
+            top_p: 0.9
+          }
+        }, { timeout: 60000 });
+        result = this.parseResponse(response.data.response);
+      }
+      return result;
     } catch (error) {
-      console.log('Ollama failed, trying Groq...', error.message);
-      return await this.callGroq(prompt);
+      console.log(`${this.provider} failed, trying fallback...`, error.message);
+      
+      // Try fallback
+      if (this.provider === 'groq') {
+        const response = await axios.post(`${this.ollamaUrl}/api/generate`, {
+          model: 'deepseek-r1:1.5b',
+          prompt,
+          stream: false,
+          options: {
+            temperature: 0.1,
+            top_p: 0.9
+          }
+        }, { timeout: 60000 });
+        return this.parseResponse(response.data.response);
+      } else {
+        const response = await axios.post(this.groqUrl, {
+          model: 'deepseek-r1-distill-llama-70b',
+          messages: [
+            { role: 'system', content: 'You are a job data extraction assistant. Return only valid JSON.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1,
+          max_tokens: 4000
+        }, {
+          headers: {
+            'Authorization': `Bearer ${this.groqApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        });
+        return this.parseResponse(response.data.choices[0].message.content);
+      }
     }
   }
 
@@ -50,12 +113,12 @@ ${html.substring(0, 15000)}`;
       prompt,
       stream: false,
       options: {
-        temperature: 0.1,
+        temperature: 0.7,
         top_p: 0.9
       }
     }, { timeout: 60000 });
 
-    return this.parseResponse(response.data.response);
+    return response.data.response;
   }
 
   async callGroq(prompt) {
@@ -66,11 +129,14 @@ ${html.substring(0, 15000)}`;
     const response = await axios.post(this.groqUrl, {
       model: 'deepseek-r1-distill-llama-70b',
       messages: [
-        { role: 'system', content: 'You are a job data extraction assistant. Return only valid JSON.' },
+        { 
+          role: 'system', 
+          content: 'You are an experienced job hunter and career advisor. Ask clarifying questions when needed, think step-by-step, and provide practical advice from a job seeker\'s perspective. Be conversational and empathetic.' 
+        },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.1,
-      max_tokens: 4000
+      temperature: 0.7,
+      max_tokens: 500
     }, {
       headers: {
         'Authorization': `Bearer ${this.groqApiKey}`,
@@ -79,7 +145,7 @@ ${html.substring(0, 15000)}`;
       timeout: 30000
     });
 
-    return this.parseResponse(response.data.choices[0].message.content);
+    return response.data.choices[0].message.content;
   }
 
   parseResponse(text) {

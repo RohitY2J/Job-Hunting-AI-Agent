@@ -9,7 +9,9 @@
     "client": "vite --config client/vite.config.js",
     "build": "vite build --config client/vite.config.js",
     "preview": "vite preview --config client/vite.config.js",
-    "scrape": "node server/scrapers/jobScraper.js"
+    "scrape": "node server/scrapers/jobScraper.js",
+    "test:llm": "node test-llm.js",
+    "test:api": "node test-api.js"
   },
   "keywords": ["ai", "jobs", "agent", "resume", "career"],
   "author": "",

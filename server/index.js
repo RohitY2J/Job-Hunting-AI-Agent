@@ -1,9 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs-extra');
-const pdfParse = require('pdf-parse');
 const connectDB = require('./config/database');
 const Job = require('./models/Job');
 const Company = require('./models/Company');
@@ -11,74 +7,36 @@ const ChatHistory = require('./models/ChatHistory');
 const htmlParserService = require('./services/htmlParserService');
 const llmService = require('./services/llmService');
 
-// Connect to MongoDB
+// Initialize database connection
 connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.static('uploads'));
+// ============================================
+// MIDDLEWARE
+// ============================================
+app.use(cors()); // Enable cross-origin requests
+app.use(express.json()); // Parse JSON request bodies
 
-// File upload configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = 'uploads/resumes';
-    fs.ensureDirSync(uploadDir);
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-
-const upload = multer({ storage });
-
-// Routes
+// ============================================
+// HEALTH CHECK
+// ============================================
 app.get('/api/health', (req, res) => {
   res.json({ status: 'Server running', timestamp: new Date().toISOString() });
 });
 
-// Resume upload and analysis
-app.post('/api/resume/upload', upload.single('resume'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
+// ============================================
+// JOB ENDPOINTS
+// ============================================
 
-    const filePath = req.file.path;
-    let resumeText = '';
-
-    if (req.file.mimetype === 'application/pdf') {
-      const dataBuffer = fs.readFileSync(filePath);
-      const data = await pdfParse(dataBuffer);
-      resumeText = data.text;
-    } else {
-      resumeText = fs.readFileSync(filePath, 'utf8');
-    }
-
-    // Basic resume analysis
-    const analysis = analyzeResume(resumeText);
-
-    res.json({
-      filename: req.file.filename,
-      analysis,
-      text: resumeText.substring(0, 500) + '...'
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to process resume' });
-  }
-});
-
-// Get jobs from MongoDB
+// Get jobs with filters (category, location, skills, etc.)
 app.get('/api/jobs', async (req, res) => {
   try {
     const { category, location, remote, skills, page = 1, limit = 20 } = req.query;
     
+    // Build filter object
     const filter = { isActive: true };
-    
     if (category) filter.category = category;
     if (location) {
       filter.$or = [
@@ -92,6 +50,7 @@ app.get('/api/jobs', async (req, res) => {
       filter.skills = { $in: skillsArray.map(skill => new RegExp(skill, 'i')) };
     }
 
+    // Query database with pagination
     const jobs = await Job.find(filter)
       .populate('company', 'name industry size location website')
       .sort({ datePosted: -1 })
@@ -113,39 +72,7 @@ app.get('/api/jobs', async (req, res) => {
   }
 });
 
-// Job matching
-app.post('/api/jobs/match', async (req, res) => {
-  try {
-    const { skills, experience, location } = req.body;
-    
-    const filter = { isActive: true };
-    
-    if (skills && skills.length > 0) {
-      filter.skills = { $in: skills.map(skill => new RegExp(skill, 'i')) };
-    }
-    
-    if (location) {
-      filter.$or = [
-        { 'location.city': new RegExp(location, 'i') },
-        { 'location.state': new RegExp(location, 'i') },
-        { 'location.remote': true }
-      ];
-    }
-
-    const matchedJobs = await Job.find(filter)
-      .populate('company', 'name industry size')
-      .sort({ datePosted: -1 })
-      .limit(10)
-      .lean();
-
-    res.json(matchedJobs);
-  } catch (error) {
-    console.error('Error matching jobs:', error);
-    res.status(500).json({ error: 'Failed to match jobs' });
-  }
-});
-
-// Get job categories
+// Get distinct job categories
 app.get('/api/jobs/categories', async (req, res) => {
   try {
     const categories = await Job.distinct('category', { isActive: true });
@@ -155,7 +82,7 @@ app.get('/api/jobs/categories', async (req, res) => {
   }
 });
 
-// Extract jobs from HTML (for chat interface)
+// Extract jobs from HTML using LLM
 app.post('/api/jobs/extract-html', async (req, res) => {
   try {
     const { html } = req.body;
@@ -164,6 +91,7 @@ app.post('/api/jobs/extract-html', async (req, res) => {
       return res.status(400).json({ error: 'HTML content required' });
     }
 
+    // Use LLM to parse HTML and extract job data
     const extracted = await htmlParserService.parseAndExtractJobs(html);
     
     res.json({
@@ -186,6 +114,7 @@ app.post('/api/jobs/save-extracted', async (req, res) => {
       return res.status(400).json({ error: 'Jobs and companies data required' });
     }
 
+    // Save to MongoDB
     const saved = await htmlParserService.saveToDatabase({ jobs, companies });
     
     res.json({
@@ -202,12 +131,16 @@ app.post('/api/jobs/save-extracted', async (req, res) => {
   }
 });
 
-// AI chat endpoint with history
+// ============================================
+// AI CHAT ENDPOINTS
+// ============================================
+
+// Main chat endpoint with history support
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, context, sessionId } = req.body;
     
-    // Check if message contains HTML
+    // Special case: HTML job extraction
     if (message.includes('<') && message.includes('>')) {
       const extracted = await htmlParserService.parseAndExtractJobs(message);
       return res.json({
@@ -217,7 +150,7 @@ app.post('/api/chat', async (req, res) => {
       });
     }
     
-    // Get or create chat history
+    // Get or create chat session
     let chatHistory = await ChatHistory.findOne({ sessionId });
     if (!chatHistory) {
       chatHistory = new ChatHistory({
@@ -229,13 +162,13 @@ app.post('/api/chat', async (req, res) => {
       });
     }
     
-    // Add user message to history
+    // Add user message to conversation history
     chatHistory.messages.push({
       role: 'user',
       content: message
     });
     
-    // Build prompt with context
+    // Build prompt with user context and conversation history
     const prompt = `You are an experienced job hunter and career advisor AI assistant.
 
 IMPORTANT INSTRUCTIONS:
@@ -249,7 +182,7 @@ User Context:
 - Experience: ${context.experience || 'Not provided'}
 - Resume Analyzed: ${context.resumeAnalyzed ? 'Yes' : 'No'}
 
-Conversation History:
+Conversation History (last 5 messages):
 ${chatHistory.messages.slice(-5).map(m => `${m.role}: ${m.content}`).join('\n')}
 
 User Message: ${message}
@@ -262,22 +195,21 @@ Think through this step-by-step:
 Provide a helpful, concise response.`;
     
     try {
+      // Call LLM (Ollama or Groq based on provider setting)
       let aiResponse;
       if (llmService.provider === 'groq') {
-        const groqResult = await llmService.callGroq(prompt);
-        aiResponse = groqResult.jobs ? generateAIResponse(message, context) : groqResult;
+        aiResponse = await llmService.callGroq(prompt);
       } else {
-        const ollamaResult = await llmService.callOllama(prompt);
-        aiResponse = ollamaResult.jobs ? generateAIResponse(message, context) : ollamaResult;
+        aiResponse = await llmService.callOllama(prompt);
       }
       
-      // Add assistant response to history
+      // Add AI response to conversation history
       chatHistory.messages.push({
         role: 'assistant',
         content: typeof aiResponse === 'string' ? aiResponse : generateAIResponse(message, context)
       });
       
-      // Save history
+      // Save conversation to database
       await chatHistory.save();
       
       res.json({ 
@@ -286,6 +218,7 @@ Provide a helpful, concise response.`;
         sessionId: chatHistory.sessionId
       });
     } catch (llmError) {
+      // Fallback to rule-based responses if LLM fails
       console.log('LLM failed, using fallback response:', llmError.message);
       const response = generateAIResponse(message, context);
       
@@ -303,7 +236,7 @@ Provide a helpful, concise response.`;
   }
 });
 
-// Get chat history
+// Get chat history for a specific session
 app.get('/api/chat/history/:sessionId', async (req, res) => {
   try {
     const chatHistory = await ChatHistory.findOne({ sessionId: req.params.sessionId });
@@ -313,7 +246,7 @@ app.get('/api/chat/history/:sessionId', async (req, res) => {
   }
 });
 
-// Get all chat sessions
+// Get all chat sessions (for sidebar/history view)
 app.get('/api/chat/sessions', async (req, res) => {
   try {
     const sessions = await ChatHistory.find({ isActive: true })
@@ -321,6 +254,7 @@ app.get('/api/chat/sessions', async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(20);
     
+    // Format for frontend display
     const formatted = sessions.map(s => ({
       sessionId: s.sessionId,
       title: s.title,
@@ -345,7 +279,11 @@ app.post('/api/chat/new', async (req, res) => {
   }
 });
 
-// Get current LLM provider
+// ============================================
+// LLM PROVIDER MANAGEMENT
+// ============================================
+
+// Get current LLM provider (Ollama or Groq)
 app.get('/api/llm/provider', (req, res) => {
   res.json({ 
     provider: llmService.provider,
@@ -356,7 +294,7 @@ app.get('/api/llm/provider', (req, res) => {
   });
 });
 
-// Switch LLM provider
+// Switch between Ollama and Groq
 app.post('/api/llm/provider', (req, res) => {
   const { provider } = req.body;
   
@@ -373,58 +311,11 @@ app.post('/api/llm/provider', (req, res) => {
   });
 });
 
-// Helper functions
-function analyzeResume(text) {
-  const skills = extractSkills(text);
-  const experience = extractExperience(text);
-  const education = extractEducation(text);
-  
-  return {
-    skills,
-    experience,
-    education,
-    score: calculateResumeScore(skills, experience, education)
-  };
-}
+// ============================================
+// HELPER FUNCTIONS (Fallback responses)
+// ============================================
 
-function extractSkills(text) {
-  const itSkills = [
-    'JavaScript', 'Python', 'Java', 'React', 'Node.js', 'SQL', 'HTML', 'CSS',
-    'Git', 'AWS', 'Docker', 'MongoDB', 'PostgreSQL', 'TypeScript', 'Vue.js',
-    'Angular', 'Express', 'Django', 'Flask', 'Spring', 'Kubernetes', 'Redis',
-    'GraphQL', 'REST API', 'Microservices', 'DevOps', 'CI/CD', 'Jenkins',
-    'Terraform', 'Linux', 'Bash', 'PowerShell', 'Azure', 'GCP', 'Elasticsearch',
-    'RabbitMQ', 'Kafka', 'Nginx', 'Apache', 'MySQL', 'Oracle', 'NoSQL',
-    'Machine Learning', 'TensorFlow', 'PyTorch', 'Pandas', 'NumPy', 'Scikit-learn'
-  ];
-  
-  return itSkills.filter(skill => 
-    text.toLowerCase().includes(skill.toLowerCase())
-  );
-}
-
-function extractExperience(text) {
-  const experienceRegex = /(\d+)\s*(years?|yrs?)\s*(of\s*)?(experience|exp)/gi;
-  const matches = text.match(experienceRegex);
-  return matches ? matches[0] : 'Not specified';
-}
-
-function extractEducation(text) {
-  const educationKeywords = ['bachelor', 'master', 'phd', 'degree', 'university', 'college', 'computer science', 'engineering'];
-  const foundEducation = educationKeywords.filter(keyword => 
-    text.toLowerCase().includes(keyword)
-  );
-  return foundEducation.length > 0 ? 'Higher Education' : 'Not specified';
-}
-
-function calculateResumeScore(skills, experience, education) {
-  let score = 0;
-  score += skills.length * 10;
-  score += experience !== 'Not specified' ? 20 : 0;
-  score += education !== 'Not specified' ? 15 : 0;
-  return Math.min(score, 100);
-}
-
+// Generate rule-based responses when LLM is unavailable
 function generateAIResponse(message, context) {
   const lowerMessage = message.toLowerCase();
   
@@ -446,6 +337,12 @@ function generateAIResponse(message, context) {
   
   return "I'm here to help with your job search! As someone who understands the job hunting process, I can assist with resumes, interviews, applications, and career advice. What specific challenge are you facing? The more details you share, the better I can help.";
 }
+
+// ============================================
+// START SERVER
+// ============================================
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 Database: MongoDB`);
+  console.log(`🤖 LLM Provider: ${llmService.provider}`);
 });
